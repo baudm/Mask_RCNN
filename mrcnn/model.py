@@ -1932,6 +1932,14 @@ class MaskRCNN():
         rpn_feature_maps = [P2, P3, P4, P5, P6]
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
+        # Semantic Segmentation head
+        P5_up = KL.UpSampling2D(size=(8, 8))(P5)
+        P4_up = KL.UpSampling2D(size=(4, 4))(P4)
+        P3_up = KL.UpSampling2D(size=(2, 2))(P3)
+        sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
+        sem_seg = KL.Conv2D(config.NUM_CLASSES, 3, padding='same', activation='softmax')(sem_seg)
+        sem_seg = KL.UpSampling2D(size=(4, 4))(sem_seg)
+
         # Anchors
         if mode == "training":
             anchors = self.get_anchors(config.IMAGE_SHAPE)
@@ -2034,7 +2042,8 @@ class MaskRCNN():
             outputs = [rpn_class_logits, rpn_class, rpn_bbox,
                        mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_mask,
                        rpn_rois, output_rois,
-                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss]
+                       rpn_class_loss, rpn_bbox_loss, class_loss, bbox_loss, mask_loss,
+                       sem_seg]
             model = KM.Model(inputs, outputs, name='mask_rcnn')
         else:
             # Network Heads
@@ -2061,7 +2070,8 @@ class MaskRCNN():
 
             model = KM.Model([input_image, input_image_meta, input_anchors],
                              [detections, mrcnn_class, mrcnn_bbox,
-                                 mrcnn_mask, rpn_rois, rpn_class, rpn_bbox],
+                                 mrcnn_mask, rpn_rois, rpn_class, rpn_bbox,
+                                 sem_seg],
                              name='mask_rcnn')
 
         # Add multi-GPU support.
