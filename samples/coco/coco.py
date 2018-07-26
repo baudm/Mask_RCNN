@@ -140,6 +140,10 @@ class CocoDataset(utils.Dataset):
             dir = os.path.dirname(os.path.realpath(__file__))
             with open(os.path.join(dir, 'panoptic_coco_categories.json'), 'r') as f:
                 self.panoptic_coco_categories = json.load(f)
+            all_cats = sorted([c['id'] for c in self.panoptic_coco_categories])
+            self.panoptic_category_mapping = dict(zip(all_cats, range(1, len(all_cats) + 1)))
+            # Mapping for BG
+            self.panoptic_category_mapping[0] = 0
 
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
@@ -299,6 +303,9 @@ class CocoDataset(utils.Dataset):
         # If RGB. Convert to grayscale for class labels.
         if sem_image.ndim != 2 :
             raise("labels should not be in RGB format")
+
+        # Map COCO class IDs to local (sequential) class IDs
+        sem_image = np.vectorize(self.panoptic_category_mapping.get)(sem_image)
 
         sem_image = np.expand_dims(sem_image, axis=2)
 
