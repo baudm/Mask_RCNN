@@ -1213,9 +1213,8 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
     mask: [height, width, instance_count]. The height and width are those
         of the image unless use_mini_mask is True, in which case they are
         defined in MINI_MASK_SHAPE.
-    ===
-    sem_mask: [height,width]. The height and width are those of the image.
-    ===
+    sem_mask: [height, width]. Semantic segmentation mask for panoptic segmentation.
+        The height and width are those of the image.
     """
     # Load image and mask
     image = dataset.load_image(image_id)
@@ -1229,7 +1228,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
     mask = utils.resize_mask(mask, scale, padding, crop)
-    sem_mask = utils.resize_mask(mask, scale, padding, crop)
+    sem_mask = utils.resize_mask(sem_mask, scale, padding, crop)
 
     # Random horizontal flips.
     # TODO: will be removed in a future update in favor of augmentation
@@ -1266,7 +1265,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         mask = det.augment_image(mask.astype(np.uint8),
                                  hooks=imgaug.HooksImages(activator=hook))
         # augment semantic masks
-        sem_mask = det.augment_image(sem_mask,hooks=imgaug.HooksImages(activator=hook))
+        sem_mask = det.augment_image(sem_mask, hooks=imgaug.HooksImages(activator=hook))
 
         # Verify that shapes didn't change
         assert image.shape == image_shape, "Augmentation shouldn't change image size"
@@ -1683,10 +1682,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
     - gt_masks: [batch, height, width, MAX_GT_INSTANCES]. The height and width
                 are those of the image unless use_mini_mask is True, in which
                 case they are defined in MINI_MASK_SHAPE.
-    ========
-    - gt_sem_masks: [batch, height, width, ]. The height and width from the images
+    - gt_sem_masks: [batch, height, width]. The height and width from the images
                     each pixel is labeled with a specific semantic class.
-    ========
 
     outputs list: Usually empty in regular training. But if detection_targets
         is True then the outputs list contains target class_ids, bbox deltas,
@@ -1958,7 +1955,7 @@ class MaskRCNN():
         P4_up = KL.UpSampling2D(size=(4, 4))(P4)
         P3_up = KL.UpSampling2D(size=(2, 2))(P3)
         sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
-        sem_seg = KL.Conv2D(config.NUM_CLASSES, 3, padding='same', activation='softmax')(sem_seg)
+        sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='softmax', name='semantic')(sem_seg)
         sem_seg = KL.UpSampling2D(size=(4, 4))(sem_seg)
 
         # Anchors
@@ -2222,7 +2219,7 @@ class MaskRCNN():
         self.keras_model.add_loss(tf.add_n(reg_losses))
 
         # Empty losses
-        loss_list = [None] * len(self.keras_model.outputs)-1
+        loss_list = [None] * (len(self.keras_model.outputs) - 1)
         loss_list.append("sparse_categorical_crossentropy")
 
         # Compile
@@ -2357,6 +2354,7 @@ class MaskRCNN():
 
         # Pre-defined layer regular expressions
         layer_regex = {
+            'semantic': r'semantic',
             # all layers but the backbone
             "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
             # From a specific Resnet stage and up
@@ -2402,6 +2400,8 @@ class MaskRCNN():
             workers = 0
         else:
             workers = multiprocessing.cpu_count()
+
+        self.keras_model.summary()
 
         self.keras_model.fit_generator(
             train_generator,

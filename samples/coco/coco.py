@@ -62,7 +62,7 @@ COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # Directory to save logs and model checkpoints, if not provided
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
-DEFAULT_DATASET_YEAR = "2014"
+DEFAULT_DATASET_YEAR = "2017"
 
 ############################################################
 #  Configurations
@@ -87,6 +87,9 @@ class CocoConfig(Config):
     # Number of classes (including background)
     NUM_CLASSES = 1 + 80  # COCO has 80 classes
 
+    # BG + thing categories + original stuff categories + merged stuff categories
+    NUM_CLASSES_PANOPTIC = 1 + 80 + 36 + 17
+
 
 ############################################################
 #  Dataset
@@ -94,7 +97,7 @@ class CocoConfig(Config):
 
 class CocoDataset(utils.Dataset):
     def load_coco(self, dataset_dir, subset, year=DEFAULT_DATASET_YEAR, class_ids=None,
-                  class_map=None, return_coco=False, auto_download=False):
+                  class_map=None, return_coco=False, auto_download=False, panoptic=False):
         """Load a subset of the COCO dataset.
         dataset_dir: The root directory of the COCO dataset.
         subset: What to load (train, val, minival, valminusminival)
@@ -109,10 +112,11 @@ class CocoDataset(utils.Dataset):
         if auto_download is True:
             self.auto_download(dataset_dir, subset, year)
 
-        coco = COCO("{}/annotations/instances_{}{}.json".format(dataset_dir, subset, year))
+        annotations = "{}/annotations/panoptic_{}{}_instances.json" if panoptic else "{}/annotations/instances_{}{}.json"
+        coco = COCO(annotations.format(dataset_dir, subset, year))
         if subset == "minival" or subset == "valminusminival":
             subset = "val"
-        image_dir = "{}/{}{}".format(dataset_dir, subset, year)
+        image_dir = "{}/images/{}{}".format(dataset_dir, subset, year)
 
         # Load all classes or a subset?
         if not class_ids:
@@ -131,10 +135,17 @@ class CocoDataset(utils.Dataset):
             image_ids = list(coco.imgs.keys())
 
         # Add classes
+        if panoptic:
+            import json
+            dir = os.path.dirname(os.path.realpath(__file__))
+            with open(os.path.join(dir, 'panoptic_coco_categories.json'), 'r') as f:
+                self.panoptic_coco_categories = json.load(f)
+
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
 
-        path_to_semantic = "{}/semantic_{}".format(dataset_dir,subset)
+        path_to_semantic = "{}/annotations/panoptic_{}{}_pixelmaps".format(dataset_dir, subset, year)
+
         # Add images
         for i in image_ids:
             self.add_image(
@@ -144,7 +155,7 @@ class CocoDataset(utils.Dataset):
                 height=coco.imgs[i]["height"],
                 annotations=coco.loadAnns(coco.getAnnIds(
                     imgIds=[i], catIds=class_ids, iscrowd=None)),
-                path_semantic=os.path.join(path_to_semantic,"{}.png".format(i)))
+                path_semantic=os.path.join(path_to_semantic, "{:012d}.png".format(i)))
 
         if return_coco:
             return coco
@@ -286,8 +297,10 @@ class CocoDataset(utils.Dataset):
         # Call the mask in a specific path (annotations/semantic_val)
         sem_image = sio.imread(self.image_info[image_id]["path_semantic"])
         # If RGB. Convert to grayscale for class labels.
-        if image.ndim != 2 :
+        if sem_image.ndim != 2 :
             raise("labels should not be in RGB format")
+
+        sem_image = np.expand_dims(sem_image, axis=2)
 
         return sem_image
 
@@ -433,7 +446,12 @@ if __name__ == '__main__':
     parser.add_argument('--year', required=False,
                         default=DEFAULT_DATASET_YEAR,
                         metavar="<year>",
-                        help='Year of the MS-COCO dataset (2014 or 2017) (default=2014)')
+                        help='Year of the MS-COCO dataset (2014 or 2017) (default=2017)')
+    parser.add_argument('--panoptic', required=False,
+                        default=True,
+                        metavar="<True|False>",
+                        help='Use panoptic dataset or not (default=True)',
+                        type=bool)
     parser.add_argument('--model', required=True,
                         metavar="/path/to/weights.h5",
                         help="Path to weights .h5 file or 'coco'")
@@ -455,6 +473,7 @@ if __name__ == '__main__':
     print("Model: ", args.model)
     print("Dataset: ", args.dataset)
     print("Year: ", args.year)
+    print("Panoptic: ", args.panoptic)
     print("Logs: ", args.logs)
     print("Auto Download: ", args.download)
 
@@ -500,15 +519,16 @@ if __name__ == '__main__':
         # Training dataset. Use the training set and 35K from the
         # validation set, as as in the Mask RCNN paper.
         dataset_train = CocoDataset()
-        dataset_train.load_coco(args.dataset, "train", year=args.year, auto_download=args.download)
+        dataset_train.load_coco(args.dataset, "train", year=args.year, auto_download=args.download, panoptic=args.panoptic)
         if args.year in '2014':
+            assert not args.panoptic
             dataset_train.load_coco(args.dataset, "valminusminival", year=args.year, auto_download=args.download)
         dataset_train.prepare()
 
         # Validation dataset
         dataset_val = CocoDataset()
         val_type = "val" if args.year in '2017' else "minival"
-        dataset_val.load_coco(args.dataset, val_type, year=args.year, auto_download=args.download)
+        dataset_val.load_coco(args.dataset, val_type, year=args.year, auto_download=args.download, panoptic=args.panoptic)
         dataset_val.prepare()
 
         # Image Augmentation
@@ -516,6 +536,14 @@ if __name__ == '__main__':
         augmentation = imgaug.augmenters.Fliplr(0.5)
 
         # *** This training schedule is an example. Update to your needs ***
+
+        # Training - Stage 0
+        print("Training semantic segmentation head")
+        model.train(dataset_train, dataset_val,
+                    learning_rate=config.LEARNING_RATE,
+                    epochs=40,
+                    layers='semantic',
+                    augmentation=augmentation)
 
         # Training - Stage 1
         print("Training network heads")
@@ -547,7 +575,7 @@ if __name__ == '__main__':
         # Validation dataset
         dataset_val = CocoDataset()
         val_type = "val" if args.year in '2017' else "minival"
-        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True, auto_download=args.download)
+        coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True, auto_download=args.download, panoptic=args.panoptic)
         dataset_val.prepare()
         print("Running COCO evaluation on {} images.".format(args.limit))
         evaluate_coco(model, dataset_val, coco, "bbox", limit=int(args.limit))
