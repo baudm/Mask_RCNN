@@ -33,6 +33,7 @@ import time
 import numpy as np
 import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
 
+import skimage.io as sio
 # Download and install the Python COCO tools from https://github.com/waleedka/coco
 # That's a fork from the original https://github.com/pdollar/coco with a bug
 # fix for Python 3.
@@ -133,6 +134,7 @@ class CocoDataset(utils.Dataset):
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
 
+        path_to_semantic = "{}/semantic_{}".format(dataset_dir,subset)
         # Add images
         for i in image_ids:
             self.add_image(
@@ -141,7 +143,9 @@ class CocoDataset(utils.Dataset):
                 width=coco.imgs[i]["width"],
                 height=coco.imgs[i]["height"],
                 annotations=coco.loadAnns(coco.getAnnIds(
-                    imgIds=[i], catIds=class_ids, iscrowd=None)))
+                    imgIds=[i], catIds=class_ids, iscrowd=None)),
+                path_semantic=os.path.join(path_to_semantic,"{}.png".format(i)))
+
         if return_coco:
             return coco
 
@@ -268,6 +272,24 @@ class CocoDataset(utils.Dataset):
         else:
             # Call super class to return an empty mask
             return super(CocoDataset, self).load_mask(image_id)
+
+    def load_sem_mask(self,image_id):
+        """Load semantic masks for the given image.
+
+        Returns:
+        masks: A bool array of shape [height, width] with
+            mask identified per pixel
+        class_ids: a 1D array of class IDs of the instance masks. (FOR REVIEW)
+        """
+
+        """ TO DO: specify function in parent class. IF still needed """
+        # Call the mask in a specific path (annotations/semantic_val)
+        sem_image = sio.imread(self.image_info[image_id]["path_semantic"])
+        # If RGB. Convert to grayscale for class labels.
+        if image.ndim != 2 :
+            raise("labels should not be in RGB format")
+
+        return sem_image
 
     def image_reference(self, image_id):
         """Return a link to the image in the COCO Website."""
