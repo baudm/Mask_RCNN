@@ -1956,7 +1956,7 @@ class MaskRCNN():
         P3_up = KL.UpSampling2D(size=(2, 2))(P3)
         sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
         sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='softmax', name='semantic')(sem_seg)
-        sem_seg = KL.UpSampling2D(size=(4, 4))(sem_seg)
+        sem_seg = KL.UpSampling2D(size=(4, 4), name='sem_out')(sem_seg)
 
         # Anchors
         if mode == "training":
@@ -2222,10 +2222,14 @@ class MaskRCNN():
         loss_list = [None] * (len(self.keras_model.outputs) - 1)
         loss_list.append("sparse_categorical_crossentropy")
 
+        # metrics_names
+        metrics_list = []
+        metrics_list.append("sparse_categorical_accuracy")
+
         # Compile
         self.keras_model.compile(
             optimizer=optimizer,
-            loss=loss_list)
+            loss=loss_list, metrics=metrics_list)
 
         # Add metrics for losses
         for name in loss_names:
