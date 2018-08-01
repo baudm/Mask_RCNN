@@ -99,7 +99,7 @@ def compute_overlaps_masks(masks1, masks2):
     """Computes IoU overlaps between two sets of masks.
     masks1, masks2: [Height, Width, instances]
     """
-    
+
     # If either set of masks is empty return empty result
     if masks1.shape[0] == 0 or masks2.shape[0] == 0:
         return np.zeros((masks1.shape[0], masks2.shape[-1]))

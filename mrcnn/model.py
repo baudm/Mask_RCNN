@@ -23,6 +23,7 @@ import keras.backend as K
 import keras.layers as KL
 import keras.engine as KE
 import keras.models as KM
+from PIL import Image
 
 from mrcnn import utils
 
@@ -1229,7 +1230,6 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         mode=config.IMAGE_RESIZE_MODE)
     mask = utils.resize_mask(mask, scale, padding, crop)
     sem_mask = utils.resize_mask(sem_mask, scale, padding, crop)
-
     # Random horizontal flips.
     # TODO: will be removed in a future update in favor of augmentation
     if augment:
@@ -2460,6 +2460,18 @@ class MaskRCNN():
         windows = np.stack(windows)
         return molded_images, image_metas, windows
 
+    def unmold_semantic(self,mask,image_meta):
+        """ Inputs the semantic masks in molded shape (scaled and padded form) and
+        returns it to the original image size """
+        meta = parse_image_meta(image_meta)
+        y1,x1,y2,x2 = meta['window'][0]  # coordinates where the image is located
+        sem_mask = mask[y1:y2,x1:x2]
+        # get the new shape needed
+        h,w,_ = meta['original_image_shape'][0]
+        sem_mask = np.array(Image.fromarray(sem_mask.astype('uint8')).resize((w,h), Image.NEAREST))
+
+        return sem_mask
+
     def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
                           image_shape, window):
         """Reformats the detections of one image from the format of the neural
@@ -2575,12 +2587,16 @@ class MaskRCNN():
                 self.unmold_detections(detections[i], mrcnn_mask[i],
                                        image.shape, molded_images[i].shape,
                                        windows[i])
+
+            final_sem_mask = sem_mask.argmax(axis=-1) # (1,1024,1024)
+            final_sem_mask = self.unmold_semantic(final_sem_mask.squeeze(), image_metas)
+
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,
-                'sem_mask': sem_mask.argmax(axis=-1)
+                'sem_mask': final_sem_mask
             })
         return results
 

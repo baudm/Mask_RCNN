@@ -32,7 +32,10 @@ import sys
 import time
 import numpy as np
 import imgaug  # https://github.com/aleju/imgaug (pip3 install imgaug)
+import json
+import shutil
 
+from PIL import Image
 import skimage.io as sio
 # Download and install the Python COCO tools from https://github.com/waleedka/coco
 # That's a fork from the original https://github.com/pdollar/coco with a bug
@@ -144,6 +147,7 @@ class CocoDataset(utils.Dataset):
             self.panoptic_category_mapping = dict(zip(all_cats, range(1, len(all_cats) + 1)))
             # Mapping for BG
             self.panoptic_category_mapping[0] = 0
+            self.panoptic_category_rev = dict((v,k) for k,v in self.panoptic_category_mapping.items())
 
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
@@ -381,12 +385,21 @@ def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
     return results
 
 
-def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=None):
+def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=None,panoptic_path=None):
     """Runs official COCO evaluation.
     dataset: A Dataset object with valiadtion data
     eval_type: "bbox" or "segm" for bounding box or segmentation evaluation
     limit: if not 0, it's the number of images to use for evaluation
     """
+    # load the annotations file
+    dataDir='/media/airscan/Disk1/MS-COCO/2017'
+    dataType='val2017'
+    #annFile='{}/{}/annotations/panoptic_{}_instances.json'.format(dataDir,dataType,dataType)
+    annFile='{}/{}/annotations/panoptic_{}.json'.format(dataDir,dataType,dataType)
+
+    #with open('panoptic_coco_categories.json') as json_data:
+    #    panoptic_categories = json.load(json_data)
+
     # Pick COCO images from the dataset
     image_ids = image_ids or dataset.image_ids
 
@@ -401,6 +414,10 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
     t_start = time.time()
 
     results = []
+    # for panoptic
+    sem_images = []
+    masks = []
+    class_ids = []
     for i, image_id in enumerate(image_ids):
         # Load image
         image = dataset.load_image(image_id)
@@ -416,22 +433,166 @@ def evaluate_coco(model, dataset, coco, eval_type="bbox", limit=0, image_ids=Non
                                            r["rois"], r["class_ids"],
                                            r["scores"],
                                            r["masks"].astype(np.uint8))
+        # sort the class ids and given masks
         results.extend(image_results)
+        sem_images.append(r['sem_mask'])
+        masks.append(r['masks'])
+        class_ids.append(r['class_ids'])
+
+    if panoptic_path:
+        # Outputs folders and json
+        output_json = os.path.join(panoptic_path,'panoptic_instances.json')
+        # create the json file for panoptic: format_converter.py
+        gt_json = os.path.join(panoptic_path,'panoptic_gt.json')
+        create_info_json(output_json, coco_image_ids,annFile,gt_json)
+
+        ch2_path = os.path.join(panoptic_path,'ch2_folder')
+        if os.path.isdir(ch2_path):
+            shutil.rmtree(ch2_path)
+        input_path = os.path.join(panoptic_path,'comparison_folder')
+        if os.path.isdir(input_path):
+            shutil.rmtree(input_path)
+        gt_path = os.path.join(panoptic_path,'gt_folder')
+        if os.path.isdir(gt_path):
+            shutil.rmtree(gt_path)
+        # create new directory
+        os.makedirs(ch2_path)
+        os.makedirs(gt_path)
+        os.makedirs(input_path)
+        # list of 2-channel images
+        ch2_images = []
+        for i,image in enumerate(sem_images):
+            ch2_image = get_2ch_image(dataset,image,masks[i],class_ids[i])
+            ch2_images.append(ch2_image)
+
+            # get the name of the image
+            image_name = '{:012d}.png'.format(coco_image_ids[i])
+            # save the the image
+            out_img = Image.fromarray(ch2_image.astype(np.uint8))
+            out_img.save(os.path.join(ch2_path,image_name))
+            # "input image"
+            input_img = dataset.load_image(image_ids[i])
+            comb_img = np.zeros((input_img.shape[0],input_img.shape[1]*2,3))
+            comb_img[:,:input_img.shape[1],:] = ch2_image
+            comb_img[:,input_img.shape[1]:,:] = input_img
+            img = Image.fromarray(comb_img.astype(np.uint8))
+            img.save(os.path.join(input_path,'view_'+image_name))
+            # "ground_truth image"
+            gt_img_path = '/media/airscan/Disk1/MS-COCO/2017/val2017/annotations/panoptic_val2017' # change to folder path of ground truth
+            gt_img_path = os.path.join(gt_img_path,image_name)
+            gt_img = sio.imread(gt_img_path)
+            gt_img = Image.fromarray(gt_img.astype(np.uint8))
+            gt_img.save(os.path.join(gt_path,image_name))
+            print('Image {:05} done saving'.format(i),end='\r')
 
     # Load results. This modifies results with additional attributes.
-    coco_results = coco.loadRes(results)
+    #coco_results = coco.loadRes(results)
 
     # Evaluate
-    cocoEval = COCOeval(coco, coco_results, eval_type)
-    cocoEval.params.imgIds = coco_image_ids
-    cocoEval.evaluate()
-    cocoEval.accumulate()
-    cocoEval.summarize()
+    #cocoEval = COCOeval(coco, coco_results, eval_type)
+    #cocoEval.params.imgIds = coco_image_ids
+    #cocoEval.evaluate()
+    #cocoEval.accumulate()
+    #cocoEval.summarize()
 
     print("Prediction time: {}. Average {}/image".format(
         t_prediction, t_prediction / len(image_ids)))
     print("Total time: ", time.time() - t_start)
 
+############################################################
+#  Panoptic Functions
+############################################################
+def create_info_json(output_json_path,image_ids,anno_json,gt_json_path=None):
+    with open(anno_json) as json_data:
+        images_info = json.load(json_data)
+
+    d_coco = images_info.copy() # copy images_info
+    d_coco_gt = images_info.copy()
+    del d_coco['annotations']
+
+    d_coco['images'] = []
+    d_coco_gt['images'] = []
+    d_coco_gt['annotations'] = []
+
+    for image_info in images_info['images']:
+        if image_info['id'] in image_ids:
+            d_coco['images'].append(image_info)
+            d_coco_gt['images'].append(image_info)
+
+    for anno_info in images_info['annotations']:
+        if anno_info['image_id'] in image_ids:
+            d_coco_gt['annotations'].append(anno_info)
+
+    with open(output_json_path,'w') as json_data:
+        json.dump(d_coco,json_data)
+
+    if gt_json_path:
+        with open(gt_json_path,'w') as json_data:
+            json.dump(d_coco_gt,json_data)
+
+def s_to_p_classes(dataset,mask):
+    """ inputs a semantic mask with labels sorted as arange ~[0,138] ann
+    returns a semantic mask with desired panoptic labels """
+
+    # convert each pixel to Panoptic class
+    flat_mask = mask.flatten()
+    flat_pmask = np.zeros(flat_mask.shape)
+
+    pmask = np.vectorize(dataset.panoptic_category_rev.get)(mask)
+    #for i,px in enumerate(flat_mask):
+    #    if px > 0: # errors if ID is 0
+    #        flat_pmask[i] = dataset.panoptic_category_rev[px]
+
+    # reshape to original mask size
+    #pmask = flat_pmask.reshape(mask.shape)
+
+    return pmask
+
+def get_2ch_image(dataset,sem_image,masks,class_ids):
+    """override the semantic mask labels in the 1st channel
+                 count the instance of masks in 2nd channel
+       dataset: CocoDataset instance
+       sem_image: The semantic image output
+       masks: mask of the predicted image (h,w,n), n = number of objects in image
+       class_ids: classes present in the image, should be aligned with masks arrangement
+    """
+
+    # convert all present ids to source_class_id
+    h,w = (sem_image.shape[0],sem_image.shape[1])    # save in np.zeros(height,width,3)
+    ch2_image = np.zeros((h,w,3) )
+
+    psem_image = s_to_p_classes(dataset,sem_image)
+    ch2_image[:,:,0] = psem_image            # store the semantic labels
+
+    #source_ids = []
+    #for id in class_ids:
+    #    source_ids.append(dataset.panoptic_category_rev[id])
+    source_ids = np.vectorize(dataset.panoptic_category_rev.get)(class_ids)
+
+    # create the 2ch PNG
+    unique_ids = dict()
+    for i,id in enumerate(source_ids):
+        if id not in unique_ids:
+            unique_ids[id] = 0  # instance count per id
+        else:
+            unique_ids[id] += 1
+        y,x = np.where(masks[:,:,i]==1)
+        ch2_image[y,x,0] = id # prioritize the class of the instance
+        ch2_image[:,:,1] += unique_ids[id]*masks[:,:,i] # assume that there is no overlap of instance
+
+    return ch2_image
+
+def get_category_name(id=None):
+    # load the panoptic categories -> from panoptic id
+    with open('panoptic_coco_categories.json') as json_data:
+        panoptic_categories = json.load(json_data)
+
+    if id:
+        for cat in panoptic_categories:
+            if cat['id'] == id:
+                return cat['name']
+    else:
+        return 'void'
 
 ############################################################
 #  Training
@@ -584,8 +745,16 @@ if __name__ == '__main__':
         val_type = "val" if args.year in '2017' else "minival"
         coco = dataset_val.load_coco(args.dataset, val_type, year=args.year, return_coco=True, auto_download=args.download, panoptic=args.panoptic)
         dataset_val.prepare()
+
+        panoptic_output_path = None
+        if args.panoptic:
+            panoptic_output_path = os.path.join(args.dataset,'panoptic_output')
+            if os.path.isdir(panoptic_output_path):
+                shutil.rmtree(panoptic_output_path) # Warning: deletes the current panoptic output folder
+            os.makedirs(panoptic_output_path)
+
         print("Running COCO evaluation on {} images.".format(args.limit))
-        evaluate_coco(model, dataset_val, coco, "bbox", limit=int(args.limit))
+        evaluate_coco(model, dataset_val, coco, "bbox", limit=int(args.limit), panoptic_path=panoptic_output_path)
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'evaluate'".format(args.command))
