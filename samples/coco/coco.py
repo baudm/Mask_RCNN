@@ -91,7 +91,7 @@ class CocoConfig(Config):
     NUM_CLASSES = 1 + 80  # COCO has 80 classes
 
     # BG + thing categories + original stuff categories + merged stuff categories
-    NUM_CLASSES_PANOPTIC = 1 + 80 + 36 + 17
+    NUM_CLASSES_PANOPTIC = 1 + 36 + 17
 
 
 ############################################################
@@ -150,11 +150,18 @@ class CocoDataset(utils.Dataset):
             dir = os.path.dirname(os.path.realpath(__file__))
             with open(os.path.join(dir, 'panoptic_coco_categories.json'), 'r') as f:
                 self.panoptic_coco_categories = json.load(f)
-            all_cats = sorted([c['id'] for c in self.panoptic_coco_categories])
-            self.panoptic_category_mapping = dict(zip(all_cats, range(1, len(all_cats) + 1)))
-            # Mapping for BG
+            things = []
+            stuff = []
+            for c in self.panoptic_coco_categories:
+                subset = things if c['isthing'] else stuff
+                subset.append(c['id'])
+            stuff.sort()
+            self.panoptic_category_mapping = dict(zip(stuff, range(1, len(stuff) + 1)))
+            self.panoptic_category_rev = {v: k for k, v in self.panoptic_category_mapping.items()}
+            for c in things:
+                self.panoptic_category_mapping[c] = 0
             self.panoptic_category_mapping[0] = 0
-            self.panoptic_category_rev = dict((v,k) for k,v in self.panoptic_category_mapping.items())
+            self.panoptic_category_rev[0] = 0
 
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
