@@ -1955,7 +1955,7 @@ class MaskRCNN():
         P4_up = KL.UpSampling2D(size=(4, 4))(P4)
         P3_up = KL.UpSampling2D(size=(2, 2))(P3)
         sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
-        sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='softmax', name='semantic')(sem_seg)
+        sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='softmax', name='sem_head')(sem_seg)
         sem_seg = KL.UpSampling2D(size=(4, 4), name='sem_out')(sem_seg)
 
         # Anchors

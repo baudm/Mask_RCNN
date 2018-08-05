@@ -153,8 +153,8 @@ class CocoDataset(utils.Dataset):
             things = []
             stuff = []
             for c in self.panoptic_coco_categories:
-                subset = things if c['isthing'] else stuff
-                subset.append(c['id'])
+                cat = things if c['isthing'] else stuff
+                cat.append(c['id'])
             stuff.sort()
             self.panoptic_category_mapping = dict(zip(stuff, range(1, len(stuff) + 1)))
             self.panoptic_category_rev = {v: k for k, v in self.panoptic_category_mapping.items()}
