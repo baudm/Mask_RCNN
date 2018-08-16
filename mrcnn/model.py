@@ -1955,8 +1955,33 @@ class MaskRCNN():
         P4_up = KL.UpSampling2D(size=(4, 4))(P4)
         P3_up = KL.UpSampling2D(size=(2, 2))(P3)
         sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
-        sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='softmax', name='sem_head')(sem_seg)
-        sem_seg = KL.UpSampling2D(size=(4, 4), name='sem_out')(sem_seg)
+
+        train_bn = False
+
+        x = KL.Conv2D(256, (3, 3), padding="same", name="sem_mask_conv1")(sem_seg)
+        x = BatchNorm(name='sem_mask_bn1')(x, training=train_bn)
+        x = KL.Activation('relu')(x)
+
+        x = KL.Conv2D(256, (3, 3), padding="same", name="sem_mask_conv2")(x)
+        x = BatchNorm(name='sem_mask_bn2')(x, training=train_bn)
+        x = KL.Activation('relu')(x)
+
+        x = KL.Conv2D(256, (3, 3), padding="same", name="sem_mask_conv3")(x)
+        x = BatchNorm(name='sem_mask_bn3')(x, training=train_bn)
+        x = KL.Activation('relu')(x)
+
+        x = KL.Conv2D(256, (3, 3), padding="same", name="sem_mask_conv4")(x)
+        x = BatchNorm(name='sem_mask_bn4')(x, training=train_bn)
+        x = KL.Activation('relu')(x)
+
+        x = KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu", name="sem_mask_deconv")(x)
+        x = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, (1, 1), strides=1, activation="softmax", name="sem_mask")(x)
+
+        sem_seg = KL.UpSampling2D(size=(2, 2), name='sem_out')(x)
+
+        # sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='linear', name='sem_head')(sem_seg)
+        # sem_seg = KL.UpSampling2D(size=(4, 4), name='sem_out')(sem_seg)
+        # sem_seg = KL.Activation('softmax')(sem_seg)
 
         # Anchors
         if mode == "training":

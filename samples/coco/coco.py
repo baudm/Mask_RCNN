@@ -155,13 +155,19 @@ class CocoDataset(utils.Dataset):
             for c in self.panoptic_coco_categories:
                 cat = things if c['isthing'] else stuff
                 cat.append(c['id'])
+            things.sort()
             stuff.sort()
-            self.panoptic_category_mapping = dict(zip(stuff, range(1, len(stuff) + 1)))
-            self.panoptic_category_rev = {v: k for k, v in self.panoptic_category_mapping.items()}
+            self.things_category_mapping = dict(zip(things, range(1, len(things) + 1)))
+            self.things_category_rev = {v: k for k, v in self.things_category_mapping.items()}
+            self.things_category_mapping[0] = 0
+            self.things_category_rev[0] = 0
+
+            self.stuff_category_mapping = dict(zip(stuff, range(1, len(stuff) + 1)))
+            self.stuff_category_rev = {v: k for k, v in self.stuff_category_mapping.items()}
+            self.stuff_category_mapping[0] = 0
+            self.stuff_category_rev[0] = 0
             for c in things:
-                self.panoptic_category_mapping[c] = 0
-            self.panoptic_category_mapping[0] = 0
-            self.panoptic_category_rev[0] = 0
+                self.stuff_category_mapping[c] = 0
 
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
@@ -323,7 +329,7 @@ class CocoDataset(utils.Dataset):
             raise("labels should not be in RGB format")
 
         # Map COCO class IDs to local (sequential) class IDs
-        sem_image = np.vectorize(self.panoptic_category_mapping.get)(sem_image)
+        sem_image = np.vectorize(self.stuff_category_mapping.get)(sem_image)
 
         sem_image = np.expand_dims(sem_image, axis=2)
 
@@ -562,10 +568,10 @@ def s_to_p_classes(dataset,mask):
     flat_mask = mask.flatten()
     flat_pmask = np.zeros(flat_mask.shape)
 
-    pmask = np.vectorize(dataset.panoptic_category_rev.get)(mask)
+    pmask = np.vectorize(dataset.stuff_category_rev.get)(mask)
     #for i,px in enumerate(flat_mask):
     #    if px > 0: # errors if ID is 0
-    #        flat_pmask[i] = dataset.panoptic_category_rev[px]
+    #        flat_pmask[i] = dataset.things_category_rev[px]
 
     # reshape to original mask size
     #pmask = flat_pmask.reshape(mask.shape)
@@ -583,26 +589,34 @@ def get_2ch_image(dataset,sem_image,masks,class_ids):
 
     # convert all present ids to source_class_id
     h,w = (sem_image.shape[0],sem_image.shape[1])    # save in np.zeros(height,width,3)
-    ch2_image = np.zeros((h,w,3) )
+    ch2_image = np.zeros((h,w,3),dtype='uint8')
 
     psem_image = s_to_p_classes(dataset,sem_image)
-    ch2_image[:,:,0] = psem_image            # store the semantic labels
+    #ch2_image[:,:,0] = psem_image            # store the semantic labels
 
     #source_ids = []
     #for id in class_ids:
-    #    source_ids.append(dataset.panoptic_category_rev[id])
-    source_ids = np.vectorize(dataset.panoptic_category_rev.get)(class_ids)
+    #    source_ids.append(dataset.things_category_rev[id])
+    try:
+        source_ids = np.vectorize(dataset.things_category_rev.get)(class_ids)
+    except ValueError:
+        source_ids = []
 
+    mask_sizes = np.count_nonzero(masks, axis=(0, 1))
+    order = np.argsort(mask_sizes)
+    # Start from biggest mask to smallest
+    order = np.flip(order, axis=-1)
     # create the 2ch PNG
     unique_ids = dict()
-    for i,id in enumerate(source_ids):
+    for i in order:
+        id = source_ids[i]
         if id not in unique_ids:
             unique_ids[id] = 0  # instance count per id
         else:
             unique_ids[id] += 1
         y,x = np.where(masks[:,:,i]==1)
         ch2_image[y,x,0] = id # prioritize the class of the instance
-        ch2_image[:,:,1] += unique_ids[id]*masks[:,:,i] # assume that there is no overlap of instance
+        ch2_image[y,x,1] = unique_ids[id]# assume that there is no overlap of instance
 
     return ch2_image
 
@@ -684,22 +698,21 @@ def generate_submission(model, dataset_path, limit, panoptic_path):
         t = time.time()
         try:
             r = model.detect([image], verbose=0)[0]
-        except ValueError:
-            print('error:', image.shape)
+        except ValueError as e:
+            print('error:', image.shape, e)
             continue
         t_prediction += (time.time() - t)
 
         # Convert results to COCO format
         # Cast masks to uint8 because COCO tools errors out on bool
-        image_results = build_coco_results(dataset, coco_image_ids[i:i + 1],
-                                           r["rois"], r["class_ids"],
-                                           r["scores"],
-                                           r["masks"].astype(np.uint8))
+        # image_results = build_coco_results(dataset, coco_image_ids[i:i + 1],
+        #                                    r["rois"], r["class_ids"],
+        #                                    r["scores"],
+        #                                    r["masks"].astype(np.uint8))
 
-
-
+        # print(r['class_ids'])
+        # return
         ch2_image = get_2ch_image(dataset, r['sem_mask'], r['masks'], r['class_ids'])
-        ch2_images.append(ch2_image)
 
         # get the name of the image
         image_name = '{:012d}.png'.format(coco_image_ids[i])
@@ -709,7 +722,7 @@ def generate_submission(model, dataset_path, limit, panoptic_path):
         # "input image"
         # "ground_truth image"
 
-        print('Image {:05} done saving'.format(i), end='\r')
+        print('Image {:05} done saving'.format(image_id))
 
     # coco_image_ids = image_ids
 
