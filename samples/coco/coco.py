@@ -90,8 +90,8 @@ class CocoConfig(Config):
     # Number of classes (including background)
     NUM_CLASSES = 1 + 80  # COCO has 80 classes
 
-    # BG + thing categories + original stuff categories + merged stuff categories
-    NUM_CLASSES_PANOPTIC = 1 + 36 + 17
+    # BG + thing categories (lumped as one) + original stuff categories + merged stuff categories
+    NUM_CLASSES_PANOPTIC = 1 + 1 + 36 + 17
 
 
 ############################################################
@@ -162,12 +162,14 @@ class CocoDataset(utils.Dataset):
             self.things_category_mapping[0] = 0
             self.things_category_rev[0] = 0
 
-            self.stuff_category_mapping = dict(zip(stuff, range(1, len(stuff) + 1)))
+            self.stuff_category_mapping = dict(zip(stuff, range(2, len(stuff) + 2)))
             self.stuff_category_rev = {v: k for k, v in self.stuff_category_mapping.items()}
             self.stuff_category_mapping[0] = 0
             self.stuff_category_rev[0] = 0
+            self.stuff_category_rev[1] = 1
+            # Map all thing categories to class '1'
             for c in things:
-                self.stuff_category_mapping[c] = 0
+                self.stuff_category_mapping[c] = 1
 
         for i in class_ids:
             self.add_class("coco", i, coco.loadCats(i)[0]["name"])
@@ -592,17 +594,28 @@ def get_2ch_image(dataset,sem_image,masks,class_ids):
     ch2_image = np.zeros((h,w,3),dtype='uint8')
 
     psem_image = s_to_p_classes(dataset,sem_image)
-    #ch2_image[:,:,0] = psem_image            # store the semantic labels
+    ch2_image[:,:,0] = psem_image            # store the semantic labels
 
-    #source_ids = []
-    #for id in class_ids:
-    #    source_ids.append(dataset.things_category_rev[id])
     try:
         source_ids = np.vectorize(dataset.things_category_rev.get)(class_ids)
     except ValueError:
         source_ids = []
 
     mask_sizes = np.count_nonzero(masks, axis=(0, 1))
+
+    ## IDEA: sort classes by mean mask size first (biggest - background),
+    #        then sort masks within the same class (biggest - foreground)
+    # However, doesn't work as well as simple sorting of masks
+    # unique_classes = np.unique(source_ids)
+    # mean_mask_sizes = [mask_sizes[source_ids == c].mean() for c in unique_classes]
+    # mean_mask_map = dict(zip(unique_classes, mean_mask_sizes))
+
+    # Sort per class first (classes with high mean mask size most probably are "background" objects)
+    # Then, per class, sort individual masks: masks with low mask size are probably farther away from the camera.
+    # Meanwhile, within the same class, masks with higher mask size are probably closer to the camera.
+    # This implements some sort of depth ordering
+    #order = sorted(range(len(source_ids)), key=lambda i: (-mean_mask_map[source_ids[i]], mask_sizes[i]))
+
     order = np.argsort(mask_sizes)
     # Start from biggest mask to smallest
     order = np.flip(order, axis=-1)
@@ -616,9 +629,10 @@ def get_2ch_image(dataset,sem_image,masks,class_ids):
             unique_ids[id] += 1
         y,x = np.where(masks[:,:,i]==1)
         ch2_image[y,x,0] = id # prioritize the class of the instance
-        ch2_image[y,x,1] = unique_ids[id]# assume that there is no overlap of instance
+        ch2_image[y,x,1] = unique_ids[id]
 
     return ch2_image
+
 
 def get_category_name(id=None):
     # load the panoptic categories -> from panoptic id
@@ -636,63 +650,33 @@ def get_category_name(id=None):
 #  Training
 ############################################################
 
-def generate_submission(model, dataset_path, limit, panoptic_path):
-    import glob
+def generate_submission(model, dataset_path, panoptic_path):
     from PIL import Image
     import numpy as np
     import os.path
 
-    # images = glob.glob(os.path.join(dataset_path, 'images', 'test2017', '*.jpg'))
-    # images = images[:10]
-
     t_prediction = 0
     t_start = time.time()
 
-    results = []
-    # for panoptic
-    sem_images = []
-    masks = []
-    class_ids = []
     dataset = CocoDataset()
-    # print(dataset_path)
-    coco = dataset.load_coco(dataset_path, 'test-dev', year='2017', return_coco=True, panoptic=True)
+    dataset.load_coco(dataset_path, 'test', year='2017', panoptic=True)
     dataset.prepare()
 
     image_ids = dataset.image_ids
+    print(len(image_ids))
+    print(dataset.class_names)
 
     coco_image_ids = [dataset.image_info[id]["id"] for id in image_ids]
-
-    # Outputs folders and json
-    output_json = os.path.join(panoptic_path, 'panoptic_instances.json')
-    # create the json file for panoptic: format_converter.py
-    create_info_json2(output_json, coco_image_ids)
 
     ch2_path = os.path.join(panoptic_path, 'ch2_folder')
     if os.path.isdir(ch2_path):
         shutil.rmtree(ch2_path)
-    input_path = os.path.join(panoptic_path, 'comparison_folder')
-    if os.path.isdir(input_path):
-        shutil.rmtree(input_path)
     # create new directory
     os.makedirs(ch2_path)
-    os.makedirs(input_path)
-    # list of 2-channel images
-    ch2_images = []
-
 
     for i, image_id in enumerate(image_ids):
-        # Load image
-        # fname = coco.loadImgs(image_id)[0]['file_name']
-        # image_path = os.path.join(dataset_path, fname)
-        # image = Image.open(image_path)
-        # image = np.asarray(image)
-        # image_id = int(os.path.split(image_path)[-1].split('.')[0])
-        # image_ids.append(image_id)
 
-
-        print(image_id)
         image = dataset.load_image(image_id)
-
 
         # Run detection
         t = time.time()
@@ -703,16 +687,11 @@ def generate_submission(model, dataset_path, limit, panoptic_path):
             continue
         t_prediction += (time.time() - t)
 
-        # Convert results to COCO format
-        # Cast masks to uint8 because COCO tools errors out on bool
-        # image_results = build_coco_results(dataset, coco_image_ids[i:i + 1],
-        #                                    r["rois"], r["class_ids"],
-        #                                    r["scores"],
-        #                                    r["masks"].astype(np.uint8))
+        # Ignore the semantic mask prediction for now, since DeepLabv3 output is better
+        #sem_mask = r['sem_mask']
+        sem_mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
 
-        # print(r['class_ids'])
-        # return
-        ch2_image = get_2ch_image(dataset, r['sem_mask'], r['masks'], r['class_ids'])
+        ch2_image = get_2ch_image(dataset, sem_mask, r['masks'], r['class_ids'])
 
         # get the name of the image
         image_name = '{:012d}.png'.format(coco_image_ids[i])
@@ -722,19 +701,7 @@ def generate_submission(model, dataset_path, limit, panoptic_path):
         # "input image"
         # "ground_truth image"
 
-        print('Image {:05} done saving'.format(image_id))
-
-    # coco_image_ids = image_ids
-
-    # Load results. This modifies results with additional attributes.
-    # coco_results = coco.loadRes(results)
-
-    # Evaluate
-    # cocoEval = COCOeval(coco, coco_results, eval_type)
-    # cocoEval.params.imgIds = coco_image_ids
-    # cocoEval.evaluate()
-    # cocoEval.accumulate()
-    # cocoEval.summarize()
+        print('Image {:05d} done saving'.format(i))
 
     print("Prediction time: {}. Average {}/image".format(
         t_prediction, t_prediction / len(image_ids)))
@@ -900,7 +867,7 @@ if __name__ == '__main__':
 
     elif args.command == 'submission':
         panoptic_output_path = os.path.join(args.dataset, 'panoptic_output')
-        generate_submission(model, args.dataset, limit=int(args.limit), panoptic_path=panoptic_output_path)
+        generate_submission(model, args.dataset, panoptic_path=panoptic_output_path)
 
 
     else:

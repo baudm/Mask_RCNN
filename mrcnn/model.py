@@ -26,6 +26,7 @@ import keras.models as KM
 from PIL import Image
 
 from mrcnn import utils
+from mrcnn.layers import BilinearUpSampling2D
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -1951,9 +1952,9 @@ class MaskRCNN():
         mrcnn_feature_maps = [P2, P3, P4, P5]
 
         # Semantic Segmentation head
-        P5_up = KL.UpSampling2D(size=(8, 8))(P5)
-        P4_up = KL.UpSampling2D(size=(4, 4))(P4)
-        P3_up = KL.UpSampling2D(size=(2, 2))(P3)
+        P5_up = BilinearUpSampling2D(size=(8, 8))(P5)
+        P4_up = BilinearUpSampling2D(size=(4, 4))(P4)
+        P3_up = BilinearUpSampling2D(size=(2, 2))(P3)
         sem_seg = KL.concatenate([P5_up, P4_up, P3_up, P2])
 
         train_bn = False
@@ -1977,11 +1978,7 @@ class MaskRCNN():
         x = KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu", name="sem_mask_deconv")(x)
         x = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, (1, 1), strides=1, activation="softmax", name="sem_mask")(x)
 
-        sem_seg = KL.UpSampling2D(size=(2, 2), name='sem_out')(x)
-
-        # sem_seg = KL.Conv2D(config.NUM_CLASSES_PANOPTIC, 3, padding='same', activation='linear', name='sem_head')(sem_seg)
-        # sem_seg = KL.UpSampling2D(size=(4, 4), name='sem_out')(sem_seg)
-        # sem_seg = KL.Activation('softmax')(sem_seg)
+        sem_seg = BilinearUpSampling2D(size=(2, 2), name='sem_out')(x)
 
         # Anchors
         if mode == "training":
@@ -2602,6 +2599,7 @@ class MaskRCNN():
             log("molded_images", molded_images)
             log("image_metas", image_metas)
             log("anchors", anchors)
+
         # Run object detection
         detections, _, _, mrcnn_mask, _, _, _, sem_mask =\
             self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
