@@ -2208,6 +2208,19 @@ class MaskRCNN():
                                 md5_hash='a268eb855778b3df3c7506639542a6af')
         return weights_path
 
+    def get_coco_weights(self):
+        """Downloads COCO trained weights (finetuned from Matterport weights).
+        Returns path to weights file.
+        """
+        from keras.utils.data_utils import get_file
+        TF_WEIGHTS_PATH = 'https://gitlab.com/baudm/coco_panoptic_challenge/raw/41b3a5bfb4ac1f823446da244ed4a7b74f594c74/panoptic_rcnn_coco.h5'
+        weights_path = get_file('panoptic_rcnn_coco.h5',
+                                TF_WEIGHTS_PATH,
+                                cache_subdir='models',
+                                file_hash='0ee514c8b30720f80e5414a5763e9cd7226a85e0b146984733c5e5021f4349c8')
+        return weights_path
+
+
     def compile(self, learning_rate, momentum):
         """Gets the model ready for training. Adds losses, regularization, and
         metrics. Then calls the Keras compile() function.

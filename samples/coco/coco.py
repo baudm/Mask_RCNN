@@ -60,7 +60,7 @@ from mrcnn.config import Config
 from mrcnn import model as modellib, utils
 
 # Path to trained weights file
-COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
+#COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 
 # Directory to save logs and model checkpoints, if not provided
 # through the command line argument --logs
@@ -777,7 +777,7 @@ if __name__ == '__main__':
 
     # Select weights file to load
     if args.model.lower() == "coco":
-        model_path = COCO_MODEL_PATH
+        model_path = model.get_coco_weights()
     elif args.model.lower() == "last":
         # Find last trained weights
         model_path = model.find_last()
